@@ -7,6 +7,11 @@ from flask_sqlalchemy import SQLAlchemy
 import click
 from flask import request, url_for, redirect, flash
 from flask import flash
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_login import LoginManager
+from flask_login import UserMixin
+from flask_login import login_user
+
 WIN = sys.platform.startswith('win')
 if WIN:  # 如果是 Windows 系统，使用三个斜线
     prefix = 'sqlite:///'
@@ -19,7 +24,34 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False  # 关闭对模型修改的
 app.config['SECRET_KEY'] = 'dev'  # 等同于 app.secret_key = 'dev'
 # 在扩展类实例化前加载配置
 db = SQLAlchemy(app)
+login_manager = LoginManager(app)  # 实例化扩展类
 
+@login_manager.user_loader
+def load_user(user_id):  # 创建用户加载回调函数，接受用户 ID 作为参数
+    user = User.query.get(int(user_id))  # 用 ID 作为 User 模型的主键查询对应的用户
+    return user  # 返回用户对象
+
+
+
+@app.cli.command()
+@click.option('--username', prompt=True, help='The username used to login.')
+@click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True, help='The password used to login.')
+def admin(username, password):
+    """Create user."""
+    db.create_all()
+    user = User.query.first()
+    if user is not None:
+        click.echo('Updating user...')
+        user.username = username
+        user.set_password(password)  # 设置密码
+    else:
+        click.echo('Creating user...')
+        user = User(username=username, name='Admin')
+        user.set_password(password)  # 设置密码
+        db.session.add(user)
+
+    db.session.commit()  # 提交数据库会话
+    click.echo('Done.')
 
 @app.context_processor
 def inject_user():  # 函数名可以随意修改
@@ -88,3 +120,37 @@ class Movie(db.Model):  # 表名将会是 movie
     id = db.Column(db.Integer, primary_key=True)  # 主键
     title = db.Column(db.String(60))  # 电影标题
     year = db.Column(db.String(4))  # 电影年份
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        if not username or not password:
+            flash('Invalid input.')
+            return redirect(url_for('login'))
+
+        user = User.query.first()
+        # 验证用户名和密码是否一致
+        if username == user.username and user.validate_password(password):
+            login_user(user)  # 登入用户
+            flash('Login success.')
+            return redirect(url_for('index'))  # 重定向到主页
+
+        flash('Invalid username or password.')  # 如果验证失败，显示错误消息
+        return redirect(url_for('login'))  # 重定向回登录页面
+
+    return render_template('login.html')
+
+from flask_login import login_required, logout_user
+
+# ...
+
+@app.route('/logout')
+@login_required  # 用于视图保护，后面会详细介绍
+def logout():
+    logout_user()  # 登出用户
+    flash('Goodbye.')
+    return redirect(url_for('index'))  # 重定向回首页
